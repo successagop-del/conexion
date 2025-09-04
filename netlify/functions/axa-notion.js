@@ -1,57 +1,44 @@
 // netlify/functions/axa-notion.js
-import { Client } from "@notionhq/client";
+const { Client } = require("@notionhq/client");
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
-export const handler = async (event) => {
+exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
-    return resp(405, { ok: false, error: "Use POST" });
+    return respond(405, { ok: false, error: "Use POST" });
   }
 
   try {
     const body = JSON.parse(event.body || "{}");
     const mode = body.mode || "page";
 
-    // 1) Crear PÁGINA bajo una página padre
+    // === 1) Crear PÁGINA bajo una página padre ==========================
     if (mode === "page") {
       const { parentPageId, title = "Untitled" } = body;
-
-      if (!parentPageId) {
-        return resp(400, { ok: false, error: "Missing parentPageId" });
-      }
+      if (!parentPageId) return respond(400, { ok: false, error: "Missing parentPageId" });
 
       const page = await notion.pages.create({
         parent: { page_id: parentPageId },
         properties: {
-          title: [
-            {
-              type: "text",
-              text: { content: title },
-            },
-          ],
+          title: {
+            title: [{ type: "text", text: { content: title } }],
+          },
         },
       });
 
-      const id = page.id;                       // con guiones
-      const clean = id.replace(/-/g, "");       // sin guiones para URL Notion
-      const url = `https://www.notion.so/${clean}`;
-
-      return resp(200, { ok: true, type: "page", id, url });
+      const id = page.id;
+      const url = `https://www.notion.so/${id.replace(/-/g, "")}`;
+      return respond(200, { ok: true, type: "page", id, url });
     }
 
-    // 2) Crear ITEM en una BASE DE DATOS
+    // === 2) Crear ITEM en una BASE DE DATOS =============================
     if (mode === "database") {
       const { databaseId, title = "Untitled", properties = {} } = body;
+      if (!databaseId) return respond(400, { ok: false, error: "Missing databaseId" });
 
-      if (!databaseId) {
-        return resp(400, { ok: false, error: "Missing databaseId" });
-      }
-
-      // Forzamos una propiedad de título si la DB usa "Name" como title
+      // La mayoría de DBs usan "Name" como property de título
       const finalProps = {
-        Name: {
-          title: [{ type: "text", text: { content: title } }],
-        },
+        Name: { title: [{ type: "text", text: { content: title } }] },
         ...properties,
       };
 
@@ -61,20 +48,18 @@ export const handler = async (event) => {
       });
 
       const id = page.id;
-      const clean = id.replace(/-/g, "");
-      const url = `https://www.notion.so/${clean}`;
-
-      return resp(200, { ok: true, type: "db_item", id, url });
+      const url = `https://www.notion.so/${id.replace(/-/g, "")}`;
+      return respond(200, { ok: true, type: "db_item", id, url });
     }
 
-    return resp(400, { ok: false, error: "Invalid mode (use 'page' or 'database')" });
+    return respond(400, { ok: false, error: "Invalid mode (use 'page' or 'database')" });
   } catch (err) {
-    console.error(err);
-    return resp(500, { ok: false, error: err.message || "Internal Error" });
+    console.error("Function error:", err);
+    return respond(500, { ok: false, error: err.message || "Internal Error" });
   }
 };
 
-function resp(statusCode, body) {
+function respond(statusCode, body) {
   return {
     statusCode,
     headers: { "Content-Type": "application/json" },

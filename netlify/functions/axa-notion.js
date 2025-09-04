@@ -1,76 +1,85 @@
-// Netlify Function: /.netlify/functions/axa-notion
+// netlify/functions/axa-notion.js
 import { Client } from "@notionhq/client";
 
+const notion = new Client({ auth: process.env.NOTION_TOKEN });
+
 export const handler = async (event) => {
-  // Solo aceptamos POST
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ ok: false, error: "Use POST" }),
-    };
+    return resp(405, { ok: false, error: "Use POST" });
   }
 
   try {
-    const NOTION_TOKEN = process.env.NOTION_TOKEN;
-    if (!NOTION_TOKEN) {
-      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Missing NOTION_TOKEN" }) };
-    }
-
-    const notion = new Client({ auth: NOTION_TOKEN });
     const body = JSON.parse(event.body || "{}");
+    const mode = body.mode || "page";
 
-    // Parámetros
-    const {
-      mode = "page",               // "page" | "database"
-      title = "AXA — Test Global 🚀",
-      parentPageId,                // requerido si mode="page"
-      databaseId,                  // requerido si mode="database"
-      properties = {},             // props extra para DB (ej. Estado, Ejemplo)
-      content = []                 // bloques hijo (opcional para páginas)
-    } = body;
+    // 1) Crear PÁGINA bajo una página padre
+    if (mode === "page") {
+      const { parentPageId, title = "Untitled" } = body;
 
-    if (mode === "database") {
-      if (!databaseId) {
-        return { statusCode: 400, body: JSON.stringify({ ok: false, error: "databaseId requerido" }) };
+      if (!parentPageId) {
+        return resp(400, { ok: false, error: "Missing parentPageId" });
       }
 
-      // Detecta la propiedad de título real de la DB (Name/Nombre/etc.)
-      const db = await notion.databases.retrieve({ database_id: databaseId });
-      const titlePropKey = Object.keys(db.properties).find(k => db.properties[k]?.type === "title");
-      if (!titlePropKey) {
-        return { statusCode: 500, body: JSON.stringify({ ok: false, error: "DB sin propiedad title" }) };
-      }
-
-      const resp = await notion.pages.create({
-        parent: { database_id: databaseId },
+      const page = await notion.pages.create({
+        parent: { page_id: parentPageId },
         properties: {
-          [titlePropKey]: { title: [{ text: { content: title } }] },
-          ...properties
-        }
+          title: [
+            {
+              type: "text",
+              text: { content: title },
+            },
+          ],
+        },
       });
 
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ ok: true, type: "database_item", id: resp.id, url: resp.url })
+      const id = page.id;                       // con guiones
+      const clean = id.replace(/-/g, "");       // sin guiones para URL Notion
+      const url = `https://www.notion.so/${clean}`;
+
+      return resp(200, { ok: true, type: "page", id, url });
+    }
+
+    // 2) Crear ITEM en una BASE DE DATOS
+    if (mode === "database") {
+      const { databaseId, title = "Untitled", properties = {} } = body;
+
+      if (!databaseId) {
+        return resp(400, { ok: false, error: "Missing databaseId" });
+      }
+
+      // Forzamos una propiedad de título si la DB usa "Name" como title
+      const finalProps = {
+        Name: {
+          title: [{ type: "text", text: { content: title } }],
+        },
+        ...properties,
       };
+
+      const page = await notion.pages.create({
+        parent: { database_id: databaseId },
+        properties: finalProps,
+      });
+
+      const id = page.id;
+      const clean = id.replace(/-/g, "");
+      const url = `https://www.notion.so/${clean}`;
+
+      return resp(200, { ok: true, type: "db_item", id, url });
     }
 
-    // Por defecto: crear subpágina bajo una página
-    if (!parentPageId) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "parentPageId requerido" }) };
-    }
-
-    const resp = await notion.pages.create({
-      parent: { page_id: parentPageId },
-      properties: { title: { title: [{ text: { content: title } }] } },
-      children: content
-    });
-
-    return { statusCode: 200, body: JSON.stringify({ ok: true, type: "page", id: resp.id, url: resp.url }) };
-
+    return resp(400, { ok: false, error: "Invalid mode (use 'page' or 'database')" });
   } catch (err) {
-    const msg = err?.body || err?.message || "Unknown error";
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: msg }) };
+    console.error(err);
+    return resp(500, { ok: false, error: err.message || "Internal Error" });
   }
 };
+
+function resp(statusCode, body) {
+  return {
+    statusCode,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
 
